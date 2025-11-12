@@ -20,12 +20,18 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install python deps
+      - name: Install python deps (Py2 vs Py3)
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install pytest
+          if [ "${{ matrix.python-version }}" = "2.7" ]; then
+            # Use older pip/setuptools and a pytest version that supports Py2
+            python -m pip install --upgrade "pip<21" "setuptools<45" wheel
+            pip install "pytest==4.6.11"
+          else
+            # Python 3: use modern pip and pytest
+            python -m pip install --upgrade pip setuptools wheel
+            pip install pytest
+          fi
 
-      # Build only on Python 3 job (we need pybind11 and a Python3 interpreter for extension)
       - name: Build C/C++ (only on Python 3)
         if: matrix.python-version == '3.11'
         run: |
@@ -41,6 +47,8 @@ jobs:
             if [ -n "$SOFILE" ]; then
               cp "$SOFILE" ../python/arithmetic_pkg/arithmetic.so
               echo "Copied $SOFILE -> python/arithmetic_pkg/arithmetic.so"
+            else
+              echo "No arithmetic extension found in build"
             fi
           fi
 
