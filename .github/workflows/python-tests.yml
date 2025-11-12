@@ -1,28 +1,21 @@
-name: Python tests (CI with C++ build)
+name: Python tests (CI with C++ build & packaging)
 
 on:
   push:
-    branches: ['**']
   pull_request:
-    branches: ['**']
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.11']
+        python-version: ['2.7', '3.11']
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install system build deps
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y build-essential cmake git pkg-config
-
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
@@ -32,29 +25,26 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install pytest
 
-      - name: Build C/C++ (if CMakeLists.txt exists)
+      # Build only on Python 3 job (we need pybind11 and a Python3 interpreter for extension)
+      - name: Build C/C++ (only on Python 3)
+        if: matrix.python-version == '3.11'
         run: |
-          if [ -f CMakeLists.txt ]; then
-            mkdir -p build
-            cd build
-            cmake .. -DCMAKE_BUILD_TYPE=Release
-            cmake --build . -j$(nproc)
-            # find built extension (.so) and copy to python package if exists
-            if [ -d ../python/arithmetic_pkg ]; then
-              SOFILE=$(find . -name "arithmetic*.so" | head -n1 || true)
-              if [ -n "$SOFILE" ]; then
-                cp "$SOFILE" ../python/arithmetic_pkg/arithmetic.so
-                echo "Copied $SOFILE -> python/arithmetic_pkg/arithmetic.so"
-                ls -l ../python/arithmetic_pkg
-              else
-                echo "No arithmetic extension found in build"
-              fi
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential cmake git pkg-config
+          mkdir -p build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake --build . -j$(nproc)
+          # copy built extension into python package so tests can import it
+          if [ -d ../python/arithmetic_pkg ]; then
+            SOFILE=$(find . -name "arithmetic*.so" | head -n1 || true)
+            if [ -n "$SOFILE" ]; then
+              cp "$SOFILE" ../python/arithmetic_pkg/arithmetic.so
+              echo "Copied $SOFILE -> python/arithmetic_pkg/arithmetic.so"
             fi
-          else
-            echo "No CMakeLists.txt found — skipping native build"
           fi
 
-      - name: Run tests
+      - name: Run pytest (on both Python versions)
         env:
           PYTHONPATH: ./python
         run: |
@@ -63,30 +53,34 @@ jobs:
   package:
     needs: test
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
-          python-version: 3.11
+          python-version: '3.11'
 
       - name: Install build deps
         run: |
           sudo apt-get update -y
           sudo apt-get install -y build-essential cmake git pkg-config
 
-      - name: Build C/C++ with CMake
+      - name: Build native and prepare package
         run: |
           mkdir -p build
           cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . -j$(nproc)
-          # copy the built extension into the python package
           SOFILE=$(find . -name "arithmetic*.so" | head -n1 || true)
           if [ -n "$SOFILE" ]; then
             cp "$SOFILE" ../python/arithmetic_pkg/arithmetic.so
+            echo "Copied $SOFILE -> python/arithmetic_pkg/arithmetic.so"
+          else
+            echo "No built extension found"
+            exit 1
           fi
 
       - name: Build wheel
@@ -100,4 +94,3 @@ jobs:
         with:
           name: arithmetic-wheel
           path: python/dist/*.whl
-
